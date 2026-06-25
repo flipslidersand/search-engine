@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SearchEngine</title>
+<style>
+  :root {
+    --primary: #1976d2;
+    --primary-dark: #1565c0;
+    --surface: #fff;
+    --bg: #f5f5f5;
+    --border: #ddd;
+    --text: #212121;
+    --muted: #757575;
+    --red: #c62828;
+    --green: #2e7d32;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    background: var(--primary);
+    color: #fff;
+    padding: 1rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,.2);
+  }
+  header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -.01em; }
+  header .badge {
+    background: rgba(255,255,255,.2);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: .75rem;
+  }
+  .container { max-width: 900px; margin: 0 auto; padding: 1.5rem 1rem; }
+
+  /* tabs */
+  .tabs { display: flex; gap: .25rem; margin-bottom: 1rem; border-bottom: 2px solid var(--border); }
+  .tab-btn {
+    padding: .5rem 1rem;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: .95rem;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color .15s, border-color .15s;
+  }
+  .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* search */
+  .search-bar {
+    display: flex;
+    gap: .5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .5rem .75rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    margin-bottom: 1rem;
+  }
+  .search-bar input {
+    flex: 1;
+    border: none;
+    outline: none;
+    font-size: 1rem;
+    background: transparent;
+  }
+  .search-bar select {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .3rem .5rem;
+    font-size: .85rem;
+    background: var(--bg);
+    cursor: pointer;
+  }
+  .btn {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: .45rem 1.1rem;
+    font-size: .9rem;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background .15s;
+  }
+  .btn:hover { background: var(--primary-dark); }
+  .btn:disabled { background: #bdbdbd; cursor: not-allowed; }
+
+  /* results */
+  .meta { font-size: .85rem; color: var(--muted); margin-bottom: .75rem; }
+  .result-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .9rem 1rem;
+    margin-bottom: .6rem;
+    transition: box-shadow .15s;
+  }
+  .result-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+  .result-header { display: flex; align-items: baseline; gap: .6rem; margin-bottom: .35rem; }
+  .rank { font-size: .75rem; font-weight: 700; color: #fff; background: var(--primary); border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .path { font-size: .85rem; color: var(--primary); font-family: monospace; word-break: break-all; }
+  .score { font-size: .78rem; color: var(--muted); margin-left: auto; flex-shrink: 0; }
+  .snippet { font-size: .88rem; color: #555; line-height: 1.5; }
+  .chunk-tag { font-size: .72rem; color: var(--muted); margin-top: .3rem; }
+
+  /* index panel */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+  .card h3 { font-size: 1rem; margin-bottom: .75rem; color: var(--text); }
+  .form-row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .form-row input[type=text] {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .45rem .75rem;
+    font-size: .9rem;
+    outline: none;
+    min-width: 200px;
+  }
+  .form-row input:focus { border-color: var(--primary); }
+  .form-row label { display: flex; align-items: center; gap: .3rem; font-size: .85rem; cursor: pointer; }
+
+  /* stats */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .75rem; }
+  .stat-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+  }
+  .stat-val { font-size: 2rem; font-weight: 700; color: var(--primary); }
+  .stat-label { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
+
+  /* toast */
+  #toast {
+    position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(4rem);
+    background: #323232; color: #fff; padding: .65rem 1.3rem;
+    border-radius: 6px; font-size: .9rem; transition: transform .25s ease;
+    pointer-events: none; z-index: 999;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+  #toast.error { background: var(--red); }
+
+  .empty { text-align: center; color: var(--muted); padding: 2rem; font-size: .95rem; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: .3rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>SearchEngine</h1>
+  <span class="badge">BM25 + ベクトル</span>
+</header>
+
+<div class="container">
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="search">検索</button>
+    <button class="tab-btn" data-tab="index">インデックス</button>
+    <button class="tab-btn" data-tab="stats">統計</button>
+  </div>
+
+  <!-- 検索タブ -->
+  <div id="tab-search" class="tab-panel active">
+    <div class="search-bar">
+      <input id="q" type="text" placeholder='キーワードを入力（例: "機械学習" type:code）' autofocus>
+      <select id="mode">
+        <option value="keyword">keyword</option>
+        <option value="hybrid">hybrid</option>
+        <option value="vector">vector</option>
+      </select>
+      <select id="n">
+        <option value="10">10件</option>
+        <option value="20">20件</option>
+        <option value="50">50件</option>
+      </select>
+      <button class="btn" id="search-btn" onclick="doSearch()">検索</button>
+    </div>
+    <div id="search-meta" class="meta"></div>
+    <div id="results"></div>
+  </div>
+
+  <!-- インデックスタブ -->
+  <div id="tab-index" class="tab-panel">
+    <div class="card">
+      <h3>ファイル / ディレクトリをインデックス</h3>
+      <div class="form-row">
+        <input id="idx-path" type="text" placeholder="/path/to/docs  または  ./sample_docs">
+        <label><input type="checkbox" id="idx-vector"> ベクトル索引</label>
+        <button class="btn" id="idx-btn" onclick="doIndex()">インデックス</button>
+      </div>
+      <div id="idx-result" style="margin-top:.75rem;font-size:.9rem;color:var(--muted)"></div>
+    </div>
+  </div>
+
+  <!-- 統計タブ -->
+  <div id="tab-stats" class="tab-panel">
+    <button class="btn" onclick="doStats()" style="margin-bottom:1rem">更新</button>
+    <div id="stats-content"><div class="empty">「更新」ボタンで統計を取得します。</div></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '';  // same origin
+
+// ── タブ切替 ──────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ── toast ─────────────────────────────────────────────────────────────────────
+let _toastTimer;
+function toast(msg, isError = false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = isError ? 'error show' : 'show';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.className = '', 3000);
+}
+
+// ── 検索 ──────────────────────────────────────────────────────────────────────
+document.getElementById('q').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
+
+async function doSearch() {
+  const q = document.getElementById('q').value.trim();
+  if (!q) { toast('クエリを入力してください', true); return; }
+  const mode = document.getElementById('mode').value;
+  const n = document.getElementById('n').value;
+  const btn = document.getElementById('search-btn');
+  btn.innerHTML = '<span class="spinner"></span>検索中…';
+  btn.disabled = true;
+
+  try {
+    const url = `${API}/search?q=${encodeURIComponent(q)}&mode=${mode}&n=${n}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    renderResults(data);
+  } catch(e) {
+    toast('エラー: ' + e.message, true);
+    document.getElementById('results').innerHTML = `<div class="empty">${e.message}</div>`;
+    document.getElementById('search-meta').textContent = '';
+  } finally {
+    btn.innerHTML = '検索';
+    btn.disabled = false;
+  }
+}
+
+function renderResults(data) {
+  const meta = document.getElementById('search-meta');
+  const results = document.getElementById('results');
+  meta.textContent = `mode=${data.mode}  ${data.total} 件  "${data.query}"`;
+  if (!data.results.length) {
+    results.innerHTML = '<div class="empty">結果がありません。</div>';
+    return;
+  }
+  results.innerHTML = data.results.map(r => `
+    <div class="result-card">
+      <div class="result-header">
+        <span class="rank">${r.rank}</span>
+        <span class="path">${escHtml(r.path)}</span>
+        <span class="score">score: ${r.score.toFixed(4)}</span>
+      </div>
+      <div class="snippet">${escHtml(r.snippet)}</div>
+      <div class="chunk-tag">chunk #${r.chunk_index}</div>
+    </div>`).join('');
+}
+
+// ── インデックス ──────────────────────────────────────────────────────────────
+async function doIndex() {
+  const path = document.getElementById('idx-path').value.trim();
+  if (!path) { toast('パスを入力してください', true); return; }
+  const vector = document.getElementById('idx-vector').checked;
+  const btn = document.getElementById('idx-btn');
+  const res_el = document.getElementById('idx-result');
+  btn.innerHTML = '<span class="spinner"></span>処理中…';
+  btn.disabled = true;
+  res_el.textContent = '';
+
+  try {
+    const res = await fetch(`${API}/index`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, vector }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    res_el.innerHTML = `✅ ${data.indexed} ファイルを追加  — documents: <b>${data.documents}</b>  chunks: <b>${data.chunks}</b>  tokenizer: ${data.tokenizer}`;
+    toast(`${data.indexed} ファイルをインデックスしました`);
+  } catch(e) {
+    res_el.innerHTML = `<span style="color:var(--red)">❌ ${escHtml(e.message)}</span>`;
+    toast('エラー: ' + e.message, true);
+  } finally {
+    btn.innerHTML = 'インデックス';
+    btn.disabled = false;
+  }
+}
+
+// ── 統計 ──────────────────────────────────────────────────────────────────────
+async function doStats() {
+  const el = document.getElementById('stats-content');
+  el.innerHTML = '<div class="empty"><span class="spinner" style="border-color:#bbb;border-top-color:var(--primary)"></span>取得中…</div>';
+  try {
+    const res = await fetch(`${API}/stats`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    el.innerHTML = `
+      <div class="stats-grid">
+        <div class="stat-box"><div class="stat-val">${data.documents}</div><div class="stat-label">ドキュメント数</div></div>
+        <div class="stat-box"><div class="stat-val">${data.chunks}</div><div class="stat-label">チャンク数</div></div>
+        <div class="stat-box"><div class="stat-val" style="font-size:1.1rem">${data.tokenizer}</div><div class="stat-label">トークナイザー</div></div>
+      </div>
+      <p style="margin-top:.75rem;font-size:.8rem;color:var(--muted)">DB: ${escHtml(data.db)}</p>`;
+  } catch(e) {
+    el.innerHTML = `<div class="empty" style="color:var(--red)">${escHtml(e.message)}</div>`;
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
