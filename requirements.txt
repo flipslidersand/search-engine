@@ -7,6 +7,9 @@
 # sentence-transformers
 # faiss-cpu
 
+# Phase 2（ベクトル検索）フォールバック用:
+numpy>=1.26
+
 # Phase 3（Web API サーバー）:
 fastapi>=0.110
 uvicorn[standard]>=0.29
