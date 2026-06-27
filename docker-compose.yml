@@ -1,0 +1,21 @@
+services:
+  search-engine:
+    build: .
+    image: search-engine:latest
+    container_name: search-engine
+    restart: unless-stopped
+    ports:
+      - "8010:8000"
+    volumes:
+      - search_data:/data
+    environment:
+      - SEARCH_DB=/data/search.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  search_data:

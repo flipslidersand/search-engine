@@ -1,0 +1,10 @@
+# SQLite インデックス（--db のデフォルト search.db 等）
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
