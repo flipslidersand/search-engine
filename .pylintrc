@@ -1,4 +1,0 @@
-[MESSAGES CONTROL]
-# optional/dev 依存パッケージの import-error を抑制
-# （fastapi, uvicorn, sentence-transformers, fugashi は venv 管理）
-disable=import-error
