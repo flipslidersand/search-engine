@@ -1,6 +1,7 @@
-"""解析結果を Markdown / SQL で出力する。"""
+"""解析結果を Markdown / SQL / ER図 で出力する。"""
 from __future__ import annotations
 from .analyzer import ColumnInfo
+from .er import detect_fk_candidates, detect_normalization_issues, render_mermaid, render_sql_with_fk
 
 
 def report_markdown(filename: str, columns: list[ColumnInfo], row_count: int) -> str:
@@ -60,6 +61,36 @@ def report_markdown(filename: str, columns: list[ColumnInfo], row_count: int) ->
 
     if not pk_candidates:
         lines.append("- 主キー（一意識別子）はどのカラムか？現状 NULL なし・完全一意のカラムなし")
+
+    return "\n".join(lines)
+
+
+def report_er(table_name: str, columns: list[ColumnInfo]) -> str:
+    """Mermaid ER図 + 正規化提案を含む Markdown を生成する。"""
+    relations = detect_fk_candidates(columns, table_name)
+    hints = detect_normalization_issues(columns)
+
+    lines = [
+        f"## ER図（Mermaid）",
+        "",
+        "```mermaid",
+        render_mermaid(table_name, columns, relations),
+        "```",
+    ]
+
+    if relations:
+        lines += ["", "### FK 候補（自動検出）", ""]
+        for r in relations:
+            lines.append(f"- `{r.from_col}` → `{r.ref_table}.{r.ref_col}`（推定）")
+        lines.append("")
+        lines.append("> ⚠️ FK 先テーブルはファイルから自動推定したスタブです。実際のテーブル名・カラム名を確認してください。")
+
+    if hints:
+        lines += ["", "### 正規化提案", ""]
+        for h in hints:
+            lines.append(f"**{h.issue}**")
+            lines.append(f"→ {h.suggestion}")
+            lines.append("")
 
     return "\n".join(lines)
 

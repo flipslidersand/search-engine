@@ -13,6 +13,7 @@ schema-gen CLI — CSV/Excel/Google Sheets 構造解析 → 要件定義・DBス
   --table <name>        SQL テーブル名（省略時はファイル名から推定）
   --out <dir>           出力ディレクトリ（省略時は標準出力）
   --format md|sql|both  出力形式（デフォルト: both）
+  --er                  ER図（Mermaid）+ 正規化提案を追加出力
 """
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from searchengine.schema_gen.ingest import load_file, load_sheets
 from searchengine.schema_gen.analyzer import analyze
-from searchengine.schema_gen.reporter import report_markdown, report_sql
+from searchengine.schema_gen.reporter import report_markdown, report_sql, report_er
 
 
 def _get(args: list[str], flag: str, default=None):
@@ -40,6 +41,7 @@ def main(argv: list[str] | None = None) -> None:
     fmt = _get(args, "--format", "both")
     sheets_url = _get(args, "--sheets")
     credentials = _get(args, "--credentials")
+    include_er = "--er" in args
 
     if sheets_url:
         rows, source_id = load_sheets(sheets_url, sheet, credentials)
@@ -62,6 +64,7 @@ def main(argv: list[str] | None = None) -> None:
     columns = analyze(rows)
     md = report_markdown(filename, columns, len(rows)) if fmt in ("md", "both") else None
     sql = report_sql(table_name, columns) if fmt in ("sql", "both") else None
+    er = report_er(table_name, columns) if include_er else None
 
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -71,12 +74,18 @@ def main(argv: list[str] | None = None) -> None:
         if sql:
             (out_dir / f"{stem}-schema.sql").write_text(sql, encoding="utf-8")
             print(f"  → {out_dir}/{stem}-schema.sql")
+        if er:
+            (out_dir / f"{stem}-er.md").write_text(er, encoding="utf-8")
+            print(f"  → {out_dir}/{stem}-er.md")
     else:
         if md:
             print(md)
         if sql:
             print("\n---\n")
             print(sql)
+        if er:
+            print("\n---\n")
+            print(er)
 
 
 if __name__ == "__main__":
