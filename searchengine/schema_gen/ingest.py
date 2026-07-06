@@ -24,6 +24,13 @@ def load_excel(path: Path, sheet: str | None = None) -> list[dict]:
     return [dict(zip(headers, row)) for row in rows[1:]]
 
 
+def load_sheets(url_or_id: str, sheet: str | None = None, credentials: str | None = None) -> tuple[list[dict], str]:
+    """Google Sheets を読み込んで (行リスト, スプレッドシートID) を返す。"""
+    from .sheets import load_sheet, extract_spreadsheet_id
+    rows = load_sheet(url_or_id, sheet, credentials)
+    return rows, extract_spreadsheet_id(url_or_id)
+
+
 def load_file(path: str | Path, sheet: str | None = None) -> tuple[list[dict], str]:
     """ファイルを読み込んで (行リスト, ファイル名) を返す。"""
     p = Path(path)
