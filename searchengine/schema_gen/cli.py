@@ -14,6 +14,7 @@ schema-gen CLI — CSV/Excel/Google Sheets 構造解析 → 要件定義・DBス
   --out <dir>           出力ディレクトリ（省略時は標準出力）
   --format md|sql|both  出力形式（デフォルト: both）
   --er                  ER図（Mermaid）+ 正規化提案を追加出力
+  --req                 要件定義書テンプレートを出力（--out 指定時は .md + .xlsx）
 """
 import sys
 from pathlib import Path
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from searchengine.schema_gen.ingest import load_file, load_sheets
 from searchengine.schema_gen.analyzer import analyze
 from searchengine.schema_gen.reporter import report_markdown, report_sql, report_er
+from searchengine.schema_gen.requirements_doc import render_requirements_md, render_requirements_xlsx
 
 
 def _get(args: list[str], flag: str, default=None):
@@ -42,6 +44,7 @@ def main(argv: list[str] | None = None) -> None:
     sheets_url = _get(args, "--sheets")
     credentials = _get(args, "--credentials")
     include_er = "--er" in args
+    include_req = "--req" in args
 
     if sheets_url:
         rows, source_id = load_sheets(sheets_url, sheet, credentials)
@@ -62,9 +65,11 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     columns = analyze(rows)
-    md = report_markdown(filename, columns, len(rows)) if fmt in ("md", "both") else None
+    row_count = len(rows)
+    md = report_markdown(filename, columns, row_count) if fmt in ("md", "both") else None
     sql = report_sql(table_name, columns) if fmt in ("sql", "both") else None
     er = report_er(table_name, columns) if include_er else None
+    req_md = render_requirements_md(filename, table_name, columns, row_count) if include_req else None
 
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +82,15 @@ def main(argv: list[str] | None = None) -> None:
         if er:
             (out_dir / f"{stem}-er.md").write_text(er, encoding="utf-8")
             print(f"  → {out_dir}/{stem}-er.md")
+        if req_md:
+            (out_dir / f"{stem}-requirements.md").write_text(req_md, encoding="utf-8")
+            print(f"  → {out_dir}/{stem}-requirements.md")
+            try:
+                render_requirements_xlsx(filename, table_name, columns, row_count,
+                                         out_dir / f"{stem}-requirements.xlsx")
+                print(f"  → {out_dir}/{stem}-requirements.xlsx")
+            except ImportError:
+                print("  ⚠ Excel 出力スキップ (pip install openpyxl)")
     else:
         if md:
             print(md)
@@ -86,6 +100,9 @@ def main(argv: list[str] | None = None) -> None:
         if er:
             print("\n---\n")
             print(er)
+        if req_md:
+            print("\n---\n")
+            print(req_md)
 
 
 if __name__ == "__main__":
