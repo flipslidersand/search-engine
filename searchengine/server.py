@@ -26,6 +26,7 @@ from pydantic import BaseModel  # pylint: disable=import-error
 
 from . import hybrid, ingest, query, tokenizer
 from .index import Index
+from .schema_gen.api import router as schema_router
 
 # ── DB パス（起動時に差し替え可） ────────────────────────────────────────────
 _DB_PATH: str = os.environ.get("SEARCH_DB", "search.db")
@@ -40,8 +41,9 @@ def _set_db(path: str) -> None:
 app = FastAPI(
     title="SearchEngine",
     description="BM25 + ベクトル ハイブリッド検索 API",
-    version="0.3.0",
+    version="0.4.0",
 )
+app.include_router(schema_router)
 
 # ── スキーマ ──────────────────────────────────────────────────────────────────
 
