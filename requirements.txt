@@ -13,3 +13,6 @@ numpy>=1.26
 # Phase 3（Web API サーバー）:
 fastapi>=0.110
 uvicorn[standard]>=0.29
+
+# Phase 4（RAG + Ollama 連携）:
+httpx>=0.27

@@ -217,6 +217,42 @@ def stats(db: str | None = Query(None)) -> StatsResponse:
     )
 
 
+@app.post("/ask", response_model=AskResponse)
+def ask(req: AskRequest) -> AskResponse:
+    """RAG: 検索 → Ollama で回答生成。"""
+    import os
+    from . import rag as rag_module
+
+    want_vector = req.mode in ("vector", "hybrid")
+    idx = _open_index(req.db, want_vector=want_vector)
+    try:
+        result = rag_module.ask(
+            idx,
+            req.question,
+            mode=req.mode,
+            top_k=req.top_k,
+            ollama_url=req.ollama_url or os.environ.get("OLLAMA_URL", "http://localhost:11434"),
+            model=req.model,
+        )
+    finally:
+        idx.close()
+
+    return AskResponse(
+        answer=result.answer,
+        sources=[
+            AskSource(
+                path=s.path,
+                chunk_index=s.chunk_index,
+                snippet=s.snippet,
+                score=round(s.score, 6),
+            )
+            for s in result.sources
+        ],
+        model=result.model,
+        latency_ms=result.latency_ms,
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def web_ui() -> HTMLResponse:
     """シングルページ検索 UI を返す。"""
