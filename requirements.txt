@@ -16,3 +16,6 @@ uvicorn[standard]>=0.29
 
 # Phase 4（RAG + Ollama 連携）:
 httpx>=0.27
+
+# Phase 5（Qdrant ベクトルストア）:
+# qdrant-client>=1.9
