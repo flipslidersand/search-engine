@@ -13,3 +13,6 @@ numpy>=1.26
 # Phase 3（Web API サーバー）:
 fastapi>=0.110
 uvicorn[standard]>=0.29
+
+# Phase 5（Qdrant ベクトルストア）:
+# qdrant-client>=1.9

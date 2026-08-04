@@ -109,5 +109,120 @@ QDRANT_COLLECTION = "search-engine-docs"
 QDRANT_VECTOR_SIZE = 384
 QDRANT_DISTANCE = "Cosine"
 
+class QdrantVectorStore:
+    """Qdrant をバックエンドとするベクトルストア。"""
+
+    def __init__(
+        self,
+        url: str,
+        collection: str = QDRANT_COLLECTION,
+        vector_size: int = QDRANT_VECTOR_SIZE,
+    ) -> None:
+        try:
+            from qdrant_client import QdrantClient  # pylint: disable=import-error
+            from qdrant_client.models import Distance, VectorParams  # pylint: disable=import-error
+        except ImportError:
+            raise ImportError(
+                "Qdrant 連携には追加パッケージが必要です:\n"
+                "  pip install qdrant-client"
+            )
+
+        self._client = QdrantClient(url=url)
+        self._collection = collection
+        self._vector_size = vector_size
+        self._Distance = Distance
+        self._VectorParams = VectorParams
+        self._ensure_collection()
+
+    def _ensure_collection(self) -> None:
+        from qdrant_client.models import Distance, VectorParams  # pylint: disable=import-error
+
+        existing = [c.name for c in self._client.get_collections().collections]
+        if self._collection not in existing:
+            self._client.create_collection(
+                collection_name=self._collection,
+                vectors_config=VectorParams(
+                    size=self._vector_size,
+                    distance=Distance.COSINE,
+                ),
+            )
+
+    def upsert(self, doc_id: str, chunk_index: int, vec: np.ndarray) -> None:
+        from qdrant_client.models import PointStruct  # pylint: disable=import-error
+
+        point_id = abs(hash(f"{doc_id}:{chunk_index}")) % (2**63)
+        self._client.upsert(
+            collection_name=self._collection,
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=vec.tolist(),
+                    payload={"doc_id": doc_id, "chunk_index": chunk_index},
+                )
+            ],
+        )
+
+    def delete_doc(self, doc_id: str) -> None:
+        from qdrant_client.models import FieldCondition, Filter, MatchValue  # pylint: disable=import-error
+
+        self._client.delete(
+            collection_name=self._collection,
+            points_selector=Filter(
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+            ),
+        )
+
+    def search(
+        self,
+        query_vec: np.ndarray,
+        limit: int = 10,
+        allowed_docs: set[str] | None = None,
+    ) -> list[VHit]:
+        from qdrant_client.models import FieldCondition, Filter, MatchAny  # pylint: disable=import-error
+
+        query_filter = None
+        if allowed_docs is not None:
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="doc_id",
+                        match=MatchAny(any=list(allowed_docs)),
+                    )
+                ]
+            )
+
+        results = self._client.search(
+            collection_name=self._collection,
+            query_vector=query_vec.tolist(),
+            limit=limit,
+            query_filter=query_filter,
+        )
+        return [
+            VHit(
+                doc_id=r.payload["doc_id"],
+                chunk_index=r.payload["chunk_index"],
+                score=r.score,
+            )
+            for r in results
+        ]
+
+    def close(self) -> None:
+        self._client.close()
+
+
+# ── ファクトリ ────────────────────────────────────────────────────────────────
+
+
+def create_vector_store(conn: sqlite3.Connection) -> SqliteVectorStore | QdrantVectorStore:
+    """QDRANT_URL 環境変数の有無でバックエンドを自動選択する。"""
+    import os
+
+    qdrant_url = os.environ.get("QDRANT_URL")
+    if qdrant_url:
+        collection = os.environ.get("QDRANT_COLLECTION", QDRANT_COLLECTION)
+        return QdrantVectorStore(url=qdrant_url, collection=collection)
+    return SqliteVectorStore(conn)
+
+
 # 後方互換エイリアス（既存コードへの影響を防ぐ）
 VectorStore = SqliteVectorStore
