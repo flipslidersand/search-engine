@@ -84,6 +84,29 @@ class StatsResponse(BaseModel):
     db: str
 
 
+class AskSource(BaseModel):
+    path: str
+    chunk_index: int
+    snippet: str
+    score: float
+
+
+class AskRequest(BaseModel):
+    question: str
+    mode: Literal["keyword", "vector", "hybrid"] = "hybrid"
+    model: str = "qwen2.5:7b"
+    top_k: int = 5
+    ollama_url: str | None = None
+    db: str | None = None
+
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: list[AskSource]
+    model: str
+    latency_ms: int
+
+
 # ── ヘルパー ──────────────────────────────────────────────────────────────────
 
 
