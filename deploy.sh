@@ -3,7 +3,7 @@
 # 使い方: ./deploy.sh [--host <ip>] [--port <port>]
 set -euo pipefail
 
-HOST="${DEPLOY_HOST:-192.168.68.63}"
+HOST="${DEPLOY_HOST:?DEPLOY_HOST を設定してください (例: export DEPLOY_HOST=192.168.1.10)}"
 REMOTE_USER="${DEPLOY_USER:-dev-nodee}"
 REMOTE_DIR="/home/${REMOTE_USER}/services/search-engine"
 LOCAL_PORT=8010
