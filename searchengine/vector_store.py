@@ -20,6 +20,29 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+try:
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import (
+        Distance,
+        FieldCondition,
+        Filter,
+        MatchAny,
+        MatchValue,
+        PointStruct,
+        VectorParams,
+    )
+    _HAS_QDRANT = True
+except ImportError:
+    QdrantClient = None  # type: ignore
+    Distance = None  # type: ignore
+    FieldCondition = None  # type: ignore
+    Filter = None  # type: ignore
+    MatchAny = None  # type: ignore
+    MatchValue = None  # type: ignore
+    PointStruct = None  # type: ignore
+    VectorParams = None  # type: ignore
+    _HAS_QDRANT = False
+
 VECTOR_SCHEMA = """
 CREATE TABLE IF NOT EXISTS vectors (
     doc_id      TEXT NOT NULL,
@@ -118,25 +141,17 @@ class QdrantVectorStore:
         collection: str = QDRANT_COLLECTION,
         vector_size: int = QDRANT_VECTOR_SIZE,
     ) -> None:
-        try:
-            from qdrant_client import QdrantClient  # pylint: disable=import-error
-            from qdrant_client.models import Distance, VectorParams  # pylint: disable=import-error
-        except ImportError:
+        if not _HAS_QDRANT:
             raise ImportError(
                 "Qdrant 連携には追加パッケージが必要です:\n"
                 "  pip install qdrant-client"
             )
-
         self._client = QdrantClient(url=url)
         self._collection = collection
         self._vector_size = vector_size
-        self._Distance = Distance
-        self._VectorParams = VectorParams
         self._ensure_collection()
 
     def _ensure_collection(self) -> None:
-        from qdrant_client.models import Distance, VectorParams  # pylint: disable=import-error
-
         existing = [c.name for c in self._client.get_collections().collections]
         if self._collection not in existing:
             self._client.create_collection(
@@ -148,8 +163,6 @@ class QdrantVectorStore:
             )
 
     def upsert(self, doc_id: str, chunk_index: int, vec: np.ndarray) -> None:
-        from qdrant_client.models import PointStruct  # pylint: disable=import-error
-
         point_id = abs(hash(f"{doc_id}:{chunk_index}")) % (2**63)
         self._client.upsert(
             collection_name=self._collection,
@@ -163,8 +176,6 @@ class QdrantVectorStore:
         )
 
     def delete_doc(self, doc_id: str) -> None:
-        from qdrant_client.models import FieldCondition, Filter, MatchValue  # pylint: disable=import-error
-
         self._client.delete(
             collection_name=self._collection,
             points_selector=Filter(
@@ -178,8 +189,6 @@ class QdrantVectorStore:
         limit: int = 10,
         allowed_docs: set[str] | None = None,
     ) -> list[VHit]:
-        from qdrant_client.models import FieldCondition, Filter, MatchAny  # pylint: disable=import-error
-
         query_filter = None
         if allowed_docs is not None:
             query_filter = Filter(
@@ -190,7 +199,6 @@ class QdrantVectorStore:
                     )
                 ]
             )
-
         results = self._client.search(
             collection_name=self._collection,
             query_vector=query_vec.tolist(),
