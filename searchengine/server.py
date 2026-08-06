@@ -84,6 +84,29 @@ class StatsResponse(BaseModel):
     db: str
 
 
+class AskSource(BaseModel):
+    path: str
+    chunk_index: int
+    snippet: str
+    score: float
+
+
+class AskRequest(BaseModel):
+    question: str
+    mode: Literal["keyword", "vector", "hybrid"] = "hybrid"
+    model: str = "qwen2.5:7b"
+    top_k: int = 5
+    ollama_url: str | None = None
+    db: str | None = None
+
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: list[AskSource]
+    model: str
+    latency_ms: int
+
+
 # ── ヘルパー ──────────────────────────────────────────────────────────────────
 
 
@@ -191,6 +214,42 @@ def stats(db: str | None = Query(None)) -> StatsResponse:
         chunks=s["chunks"],
         tokenizer=tokenizer.backend(),
         db=db or _DB_PATH,
+    )
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask(req: AskRequest) -> AskResponse:
+    """RAG: 検索 → Ollama で回答生成。"""
+    import os
+    from . import rag as rag_module
+
+    want_vector = req.mode in ("vector", "hybrid")
+    idx = _open_index(req.db, want_vector=want_vector)
+    try:
+        result = rag_module.ask(
+            idx,
+            req.question,
+            mode=req.mode,
+            top_k=req.top_k,
+            ollama_url=req.ollama_url or os.environ.get("OLLAMA_URL", "http://localhost:11434"),
+            model=req.model,
+        )
+    finally:
+        idx.close()
+
+    return AskResponse(
+        answer=result.answer,
+        sources=[
+            AskSource(
+                path=s.path,
+                chunk_index=s.chunk_index,
+                snippet=s.snippet,
+                score=round(s.score, 6),
+            )
+            for s in result.sources
+        ],
+        model=result.model,
+        latency_ms=result.latency_ms,
     )
 
 
