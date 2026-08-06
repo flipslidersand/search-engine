@@ -128,9 +128,23 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+def _validate_path(path: str) -> None:
+    """ALLOWED_INDEX_DIRS の範囲外パスを 403 で拒否する。"""
+    allowed_raw = os.environ.get("ALLOWED_INDEX_DIRS", "")
+    if not allowed_raw:
+        raise HTTPException(status_code=403, detail="ALLOWED_INDEX_DIRS が未設定です")
+    resolved = Path(path).resolve()
+    for d in allowed_raw.split(":"):
+        d = d.strip()
+        if d and resolved.is_relative_to(Path(d).resolve()):
+            return
+    raise HTTPException(status_code=403, detail=f"許可されていないパス: {path}")
+
+
 @app.post("/index", response_model=IndexResponse)
 def index_files(req: IndexRequest) -> IndexResponse:
     """指定パス（ファイルまたはディレクトリ）をインデックスに追加する。"""
+    _validate_path(req.path)
     target = Path(req.path)
     if not target.exists():
         raise HTTPException(status_code=400, detail=f"パスが存在しません: {req.path}")

@@ -1,6 +1,7 @@
 """FastAPI サーバーのエンドポイントテスト（Phase 3）。"""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -24,13 +25,14 @@ def client(tmp_db):
 
 
 @pytest.fixture()
-def sample_dir(tmp_path: Path) -> Path:
+def sample_dir(tmp_path: Path, monkeypatch) -> Path:
     (tmp_path / "a.txt").write_text(
         "機械学習はデータからパターンを学習する分野である。", encoding="utf-8"
     )
     (tmp_path / "b.txt").write_text(
         "ベクトル検索は意味的類似性に基づく検索手法である。", encoding="utf-8"
     )
+    monkeypatch.setenv("ALLOWED_INDEX_DIRS", str(tmp_path))
     return tmp_path
 
 
@@ -76,8 +78,9 @@ def test_index(client, sample_dir):
     assert data["chunks"] >= 2
 
 
-def test_index_nonexistent_path(client):
-    r = client.post("/index", json={"path": "/nonexistent/path/xyz"})
+def test_index_nonexistent_path(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLOWED_INDEX_DIRS", str(tmp_path))
+    r = client.post("/index", json={"path": str(tmp_path / "nonexistent_xyz")})
     assert r.status_code == 400
     assert "パスが存在しません" in r.json()["detail"]
 
@@ -119,3 +122,53 @@ def test_stats_after_index(client, sample_dir):
     assert r.status_code == 200
     data = r.json()
     assert data["documents"] == 2
+
+
+# ── /index セキュリティ: パストラバーサル対策 (#32) ──────────────────────────
+
+
+def test_index_path_traversal_no_allowed_dirs(client, monkeypatch):
+    monkeypatch.delenv("ALLOWED_INDEX_DIRS", raising=False)
+    r = client.post("/index", json={"path": "/etc/passwd"})
+    assert r.status_code == 403
+    assert "ALLOWED_INDEX_DIRS" in r.json()["detail"]
+
+
+def test_index_path_traversal_outside_allowed(client, tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    monkeypatch.setenv("ALLOWED_INDEX_DIRS", str(allowed))
+    r = client.post("/index", json={"path": "/etc/passwd"})
+    assert r.status_code == 403
+    assert "許可されていないパス" in r.json()["detail"]
+
+
+def test_index_path_traversal_symlink_escape(client, tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    monkeypatch.setenv("ALLOWED_INDEX_DIRS", str(allowed))
+    # allowed/../../../etc/passwd のような相対パス
+    evil = str(allowed) + "/../../../etc/passwd"
+    r = client.post("/index", json={"path": evil})
+    assert r.status_code == 403
+
+
+def test_index_path_within_allowed(client, tmp_path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    (allowed / "doc.txt").write_text("test content", encoding="utf-8")
+    monkeypatch.setenv("ALLOWED_INDEX_DIRS", str(allowed))
+    r = client.post("/index", json={"path": str(allowed)})
+    assert r.status_code == 200
+    assert r.json()["indexed"] == 1
+
+
+def test_index_multiple_allowed_dirs(client, tmp_path, monkeypatch):
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    (dir_b / "doc.txt").write_text("hello", encoding="utf-8")
+    monkeypatch.setenv("ALLOWED_INDEX_DIRS", f"{dir_a}:{dir_b}")
+    r = client.post("/index", json={"path": str(dir_b)})
+    assert r.status_code == 200
