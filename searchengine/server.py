@@ -221,7 +221,11 @@ def stats(db: str | None = Query(None)) -> StatsResponse:
 def ask(req: AskRequest) -> AskResponse:
     """RAG: 検索 → Ollama で回答生成。"""
     import os
+    import httpx as httpx_module
     from . import rag as rag_module
+
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="question が空です")
 
     want_vector = req.mode in ("vector", "hybrid")
     idx = _open_index(req.db, want_vector=want_vector)
@@ -234,6 +238,8 @@ def ask(req: AskRequest) -> AskResponse:
             ollama_url=req.ollama_url or os.environ.get("OLLAMA_URL", "http://localhost:11434"),
             model=req.model,
         )
+    except httpx_module.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Ollama エラー: {e}")
     finally:
         idx.close()
 
