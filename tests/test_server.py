@@ -172,3 +172,50 @@ def test_index_multiple_allowed_dirs(client, tmp_path, monkeypatch):
     monkeypatch.setenv("ALLOWED_INDEX_DIRS", f"{dir_a}:{dir_b}")
     r = client.post("/index", json={"path": str(dir_b)})
     assert r.status_code == 200
+
+
+# ── API 認証: X-API-Key ヘッダー (#33) ───────────────────────────────────────
+
+
+def test_api_key_not_set_allows_all(client, sample_dir, monkeypatch):
+    monkeypatch.delenv("API_KEY", raising=False)
+    r = client.get("/search", params={"q": "test"})
+    assert r.status_code == 200
+
+
+def test_api_key_valid(client, monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret123")
+    r = client.get("/search", params={"q": "test"}, headers={"X-API-Key": "secret123"})
+    assert r.status_code == 200
+
+
+def test_api_key_invalid(client, monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret123")
+    r = client.get("/search", params={"q": "test"}, headers={"X-API-Key": "wrong"})
+    assert r.status_code == 401
+    assert "Invalid API Key" in r.json()["detail"]
+
+
+def test_api_key_missing_header(client, monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret123")
+    r = client.get("/search", params={"q": "test"})
+    assert r.status_code == 401
+
+
+def test_health_no_api_key_required(client, monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret123")
+    r = client.get("/health")
+    assert r.status_code == 200
+
+
+def test_api_key_index_protected(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret123")
+    monkeypatch.setenv("ALLOWED_INDEX_DIRS", str(tmp_path))
+    r = client.post("/index", json={"path": str(tmp_path)})
+    assert r.status_code == 401
+
+
+def test_api_key_stats_protected(client, monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret123")
+    r = client.get("/stats")
+    assert r.status_code == 401
