@@ -8,3 +8,20 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# 環境変数
+.env
+.env.*
+!.env.example
+
+# Google OAuth / サービスアカウント認証
+token.json
+client_secret*.json
+service_account*.json
+credentials*.json
+*_credentials.json
+
+# テスト・ビルド成果物
+.pytest_cache/
+dist/
+*.egg-info/
