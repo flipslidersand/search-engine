@@ -20,8 +20,9 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query  # pylint: disable=import-error
+from fastapi import Depends, FastAPI, HTTPException, Query  # pylint: disable=import-error
 from fastapi.responses import FileResponse, HTMLResponse  # pylint: disable=import-error
+from fastapi.security.api_key import APIKeyHeader  # pylint: disable=import-error
 from pydantic import BaseModel  # pylint: disable=import-error
 
 from . import hybrid, ingest, query, tokenizer
@@ -30,6 +31,15 @@ from .schema_gen.api import router as schema_router
 
 # ── DB パス（起動時に差し替え可） ────────────────────────────────────────────
 _DB_PATH: str = os.environ.get("SEARCH_DB", "search.db")
+
+# ── API Key 認証 ──────────────────────────────────────────────────────────────
+_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_api_key(key: str | None = Depends(_API_KEY_HEADER)) -> None:
+    expected = os.environ.get("API_KEY")
+    if expected and key != expected:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
 
 
 def _set_db(path: str) -> None:
@@ -141,7 +151,7 @@ def _validate_path(path: str) -> None:
     raise HTTPException(status_code=403, detail=f"許可されていないパス: {path}")
 
 
-@app.post("/index", response_model=IndexResponse)
+@app.post("/index", response_model=IndexResponse, dependencies=[Depends(require_api_key)])
 def index_files(req: IndexRequest) -> IndexResponse:
     """指定パス（ファイルまたはディレクトリ）をインデックスに追加する。"""
     _validate_path(req.path)
@@ -174,7 +184,7 @@ def index_files(req: IndexRequest) -> IndexResponse:
     )
 
 
-@app.get("/search", response_model=SearchResponse)
+@app.get("/search", response_model=SearchResponse, dependencies=[Depends(require_api_key)])
 def search(
     q: str = Query(..., description="検索クエリ"),
     mode: Literal["keyword", "vector", "hybrid"] = Query("keyword"),
@@ -215,7 +225,7 @@ def search(
     return SearchResponse(mode=mode, query=q, total=len(results), results=results)
 
 
-@app.get("/stats", response_model=StatsResponse)
+@app.get("/stats", response_model=StatsResponse, dependencies=[Depends(require_api_key)])
 def stats(db: str | None = Query(None)) -> StatsResponse:
     """インデックスの統計情報を返す。"""
     idx = _open_index(db)
@@ -231,7 +241,7 @@ def stats(db: str | None = Query(None)) -> StatsResponse:
     )
 
 
-@app.post("/ask", response_model=AskResponse)
+@app.post("/ask", response_model=AskResponse, dependencies=[Depends(require_api_key)])
 def ask(req: AskRequest) -> AskResponse:
     """RAG: 検索 → Ollama で回答生成。"""
     import os
@@ -273,7 +283,7 @@ def ask(req: AskRequest) -> AskResponse:
     )
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_api_key)])
 def web_ui() -> HTMLResponse:
     """シングルページ検索 UI を返す。"""
     html_path = Path(__file__).parent / "web" / "index.html"
