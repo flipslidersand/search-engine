@@ -65,7 +65,10 @@ TOOLS = [
                     "description": "検索モード",
                 },
                 "top_k": {"type": "integer", "default": 5, "description": "取得件数"},
-                "db": {"type": "string", "description": "DB パス（省略時は SEARCH_DB 環境変数）"},
+                "db": {
+                    "type": "string",
+                    "description": "DB パス（省略時は SEARCH_DB 環境変数）",
+                },
             },
             "required": ["query"],
         },
@@ -102,7 +105,10 @@ TOOLS = [
         input_schema={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "インデックス対象のファイルまたはディレクトリ"},
+                "path": {
+                    "type": "string",
+                    "description": "インデックス対象のファイルまたはディレクトリ",
+                },
                 "vector": {
                     "type": "boolean",
                     "default": False,
@@ -130,25 +136,41 @@ TOOLS = [
 def create_server() -> Server:
     server = Server("search-engine")
 
-    async def handle_list_tools(_req: types.ListToolsRequest) -> types.ListToolsResult:
+    async def handle_list_tools(
+        _ctx: object, _params: types.PaginatedRequestParams
+    ) -> types.ListToolsResult:
         return types.ListToolsResult(tools=TOOLS)
 
-    async def handle_call_tool(req: types.CallToolRequest) -> types.CallToolResult:
-        name = req.params.name
-        args = req.params.arguments or {}
+    async def handle_call_tool(
+        _ctx: object, params: types.CallToolRequestParams
+    ) -> types.CallToolResult:
+        name = params.name
+        args = params.arguments or {}
 
         try:
             if name == "search":
-                mode: Literal["keyword", "vector", "hybrid"] = args.get("mode", "hybrid")
+                mode: Literal["keyword", "vector", "hybrid"] = args.get(
+                    "mode", "hybrid"
+                )
                 want_vector = mode in ("vector", "hybrid")
                 idx = _open_index(args.get("db"), want_vector=want_vector)
                 top_k: int = int(args.get("top_k", 5))
                 parsed = parse_query(args["query"])
 
                 if mode == "keyword":
-                    raw_hits = [(h, h.score) for h in idx.search(parsed.fts, limit=top_k, filters=parsed.filters)]
+                    raw_hits = [
+                        (h, h.score)
+                        for h in idx.search(
+                            parsed.fts, limit=top_k, filters=parsed.filters
+                        )
+                    ]
                 elif mode == "vector":
-                    raw_hits = [(h, h.score) for h in idx.vector_search(parsed.raw, limit=top_k, filters=parsed.filters)]
+                    raw_hits = [
+                        (h, h.score)
+                        for h in idx.vector_search(
+                            parsed.raw, limit=top_k, filters=parsed.filters
+                        )
+                    ]
                 else:
                     fused = hybrid.search(idx, parsed, limit=top_k)
                     raw_hits = [(f.hit, f.rrf) for f in fused]
@@ -230,7 +252,9 @@ def create_server() -> Server:
                     is_error=True,
                 )
 
-            return types.CallToolResult(content=_make_text(json.dumps(result, ensure_ascii=False)))
+            return types.CallToolResult(
+                content=_make_text(json.dumps(result, ensure_ascii=False))
+            )
 
         except Exception as exc:  # pylint: disable=broad-except
             return types.CallToolResult(
@@ -238,8 +262,12 @@ def create_server() -> Server:
                 is_error=True,
             )
 
-    server.add_request_handler("tools/list", types.ListToolsRequest, handle_list_tools)
-    server.add_request_handler("tools/call", types.CallToolRequest, handle_call_tool)
+    server.add_request_handler(
+        "tools/list", types.PaginatedRequestParams, handle_list_tools
+    )
+    server.add_request_handler(
+        "tools/call", types.CallToolRequestParams, handle_call_tool
+    )
 
     return server
 
