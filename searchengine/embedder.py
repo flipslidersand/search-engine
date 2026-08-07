@@ -26,14 +26,18 @@ from . import tokenizer
 
 def _stable_hash(token: str) -> int:
     """プロセス間で安定なハッシュ（組込 hash() はシード変動するため不可）。"""
-    return int.from_bytes(hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest(), "big")
+    return int.from_bytes(
+        hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest(), "big"
+    )
 
 
 _FALLBACK_DIM = 256
 _DEFAULT_MODEL = "cl-nagoya/ruri-base"
 
 try:  # pragma: no cover - 環境依存
-    from sentence_transformers import SentenceTransformer  # pylint: disable=import-error
+    from sentence_transformers import (
+        SentenceTransformer,
+    )  # pylint: disable=import-error
 
     _HAS_ST = True
 except Exception:
@@ -106,11 +110,21 @@ _DEFAULT_COLLECTION = "search-engine"
 _DEFAULT_TIMEOUT = 30.0
 
 
+class _BatchUnsupported(Exception):
+    """embedding-svc がバッチエンドポイント (/embed/batch) 非対応を示す内部シグナル。"""
+
+
 class RemoteEmbedder:
     """MINIPC embedding-svc (port 9092) を呼び出す HTTP Embedder。
 
-    POST /embed  {"collection": ..., "text": ..., "mode": "index"|"search"}
-    → {"vector": [...], "dim": int, "model": str}
+    バッチ優先 (#66):
+
+    - `POST /embed/batch {"collection", "texts": [...], "mode"}`
+      → `{"vectors": [[...], ...], "dim": int, "model": str}`
+      を最初に試み、1リクエストで全チャンクをベクトル化する。
+    - サービスが未対応 (404/405 または "vectors" 欠落) の場合は
+      `POST /embed {"collection", "text", "mode"}` の直列送信にフォールバックし、
+      以降はバッチを再試行しない（`_batch_supported = False` をキャッシュ）。
     """
 
     def __init__(
@@ -131,6 +145,8 @@ class RemoteEmbedder:
             self._headers["X-API-Key"] = api_key
 
         self._backend = f"remote:{base_url}:{collection}"
+        # None=未判定 / True=バッチ対応 / False=非対応（直列送信）
+        self._batch_supported: bool | None = None
         self.dim: int = self._discover_dim(httpx)
 
     def _discover_dim(self, httpx_mod) -> int:
@@ -158,33 +174,91 @@ class RemoteEmbedder:
         *,
         retries: int = 2,
     ) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, self.dim), dtype=np.float32)
+
+        # バッチ対応が判明していない / 対応済みならバッチを試みる (#66)
+        if self._batch_supported is not False:
+            try:
+                vecs = self._encode_batch(texts, mode, retries=retries)
+                self._batch_supported = True
+                return np.asarray(vecs, dtype=np.float32)
+            except _BatchUnsupported:
+                self._batch_supported = False  # 以降は直列送信
+
+        return self._encode_serial(texts, mode, retries=retries)
+
+    def _request_with_retry(self, url: str, payload: dict, retries: int):
+        """指定 URL へ POST し、transient 失敗はリトライする。最終例外は呼び出し側へ送出。"""
         import httpx  # pylint: disable=import-error
         import logging
         import time
 
         logger = logging.getLogger(__name__)
+        last_exc: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                resp = httpx.post(
+                    url, json=payload, headers=self._headers, timeout=self._timeout
+                )
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPStatusError as e:
+                # 4xx はクライアント側エラーでリトライしても直らない → 即送出
+                if e.response is not None and 400 <= e.response.status_code < 500:
+                    raise
+                last_exc = e
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+            except Exception as e:
+                last_exc = e
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+        logger.warning(
+            "RemoteEmbedder request failed after %d retries: %s", retries, last_exc
+        )
+        assert last_exc is not None
+        raise last_exc
+
+    def _encode_batch(
+        self, texts: list[str], mode: str, *, retries: int
+    ) -> list[list[float]]:
+        """/embed/batch を1リクエストで叩く。非対応なら `_BatchUnsupported` を送出。"""
+        import httpx  # pylint: disable=import-error
+
+        try:
+            resp = self._request_with_retry(
+                f"{self._base_url}/embed/batch",
+                {"collection": self._collection, "texts": texts, "mode": mode},
+                retries,
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response is not None and e.response.status_code in (404, 405):
+                raise _BatchUnsupported() from e
+            raise
+
+        data = resp.json()
+        vectors = data.get("vectors")
+        if vectors is None:
+            raise _BatchUnsupported()  # 旧サービス（単一 /embed のみ）
+        if len(vectors) != len(texts):
+            raise ValueError(
+                f"/embed/batch returned {len(vectors)} vectors for {len(texts)} texts"
+            )
+        return vectors
+
+    def _encode_serial(
+        self, texts: list[str], mode: str, *, retries: int
+    ) -> np.ndarray:
+        """1テキスト1リクエストの直列送信（バッチ非対応サービス向けフォールバック）。"""
         vecs = []
         for text in texts:
-            last_exc: Exception | None = None
-            for attempt in range(retries + 1):
-                try:
-                    resp = httpx.post(
-                        f"{self._base_url}/embed",
-                        json={"collection": self._collection, "text": text, "mode": mode},
-                        headers=self._headers,
-                        timeout=self._timeout,
-                    )
-                    resp.raise_for_status()
-                    vecs.append(resp.json()["vector"])
-                    last_exc = None
-                    break
-                except Exception as e:
-                    last_exc = e
-                    if attempt < retries:
-                        time.sleep(0.5 * (attempt + 1))
-            if last_exc is not None:
-                logger.warning("RemoteEmbedder failed after %d retries: %s", retries, last_exc)
-                raise last_exc
+            resp = self._request_with_retry(
+                f"{self._base_url}/embed",
+                {"collection": self._collection, "text": text, "mode": mode},
+                retries,
+            )
+            vecs.append(resp.json()["vector"])
         return np.asarray(vecs, dtype=np.float32)
 
 
