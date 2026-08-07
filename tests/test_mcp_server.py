@@ -17,19 +17,15 @@ from mcp import types
 
 from searchengine.mcp_server import TOOLS, create_server
 
-
 # ── ヘルパー ──────────────────────────────────────────────────────────────────
 
 
 def call_tool(name: str, args: dict) -> dict:
-    """MCP CallToolRequest を同期的に呼び出す。"""
+    """MCP tools/call を同期的に呼び出す（ハンドラは params モデルを受け取る）。"""
     server = create_server()
     handler = server.get_request_handler("tools/call")
-    req = types.CallToolRequest(
-        method="tools/call",
-        params=types.CallToolRequestParams(name=name, arguments=args),
-    )
-    result: types.CallToolResult = asyncio.run(handler.handler(req))
+    params = types.CallToolRequestParams(name=name, arguments=args)
+    result: types.CallToolResult = asyncio.run(handler.handler(None, params))
     assert not result.is_error, f"Tool error: {result.content[0].text}"
     return json.loads(result.content[0].text)
 
@@ -38,11 +34,8 @@ def call_tool_raw(name: str, args: dict) -> types.CallToolResult:
     """is_error を含む生の CallToolResult を返す。"""
     server = create_server()
     handler = server.get_request_handler("tools/call")
-    req = types.CallToolRequest(
-        method="tools/call",
-        params=types.CallToolRequestParams(name=name, arguments=args),
-    )
-    return asyncio.run(handler.handler(req))
+    params = types.CallToolRequestParams(name=name, arguments=args)
+    return asyncio.run(handler.handler(None, params))
 
 
 # ── フィクスチャ ──────────────────────────────────────────────────────────────
@@ -126,7 +119,9 @@ def test_index_unknown_extension(tmp_path: Path, tmp_db: str):
 
 def test_search_keyword(indexed_db: str):
     """keyword モードで検索すると results が返る。"""
-    result = call_tool("search", {"query": "Python", "mode": "keyword", "db": indexed_db})
+    result = call_tool(
+        "search", {"query": "Python", "mode": "keyword", "db": indexed_db}
+    )
     assert result["mode"] == "keyword"
     assert result["query"] == "Python"
     assert isinstance(result["results"], list)
@@ -164,7 +159,9 @@ def test_unknown_tool_returns_error():
 
 def test_ask_returns_result_or_error(indexed_db: str):
     """Ollama 有無に関わらず、answer または error を含む JSON が返ること。"""
-    result = call_tool_raw("ask", {"question": "What is this doc about?", "db": indexed_db})
+    result = call_tool_raw(
+        "ask", {"question": "What is this doc about?", "db": indexed_db}
+    )
     payload = json.loads(result.content[0].text)
     if result.is_error:
         assert "error" in payload
