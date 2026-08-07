@@ -28,11 +28,30 @@ _TEST_API_KEY = "test-key-123"
 
 
 def _make_resp(vector: list[float], dim: int = 4) -> MagicMock:
-    """httpx.post のモックレスポンス。"""
+    """単一 /embed のモックレスポンス。
+
+    バッチ優先実装 (#66) でも通るよう "vectors" も併せて返す
+    （単一テキストのバッチ = 長さ1のリスト）。
+    """
     m = MagicMock()
     m.raise_for_status = MagicMock()
     m.json.return_value = {
         "vector": vector,
+        "vectors": [vector],
+        "dim": dim,
+        "model": "intfloat/multilingual-e5-base",
+        "collection": "search-engine",
+        "mode": "index",
+    }
+    return m
+
+
+def _make_batch_resp(vectors: list[list[float]], dim: int = 4) -> MagicMock:
+    """/embed/batch のモックレスポンス（複数ベクトル）。"""
+    m = MagicMock()
+    m.raise_for_status = MagicMock()
+    m.json.return_value = {
+        "vectors": vectors,
         "dim": dim,
         "model": "intfloat/multilingual-e5-base",
         "collection": "search-engine",
@@ -125,22 +144,87 @@ def test_remote_embedder_encode_single():
 
 
 def test_remote_embedder_encode_batch():
-    vec = _unit_vec(4)
-    resp = _make_resp(vec)
-    with patch("httpx.post", return_value=resp) as mock_post:
-        e_resp = _make_resp(vec)
-        mock_post.return_value = e_resp
+    """複数テキストは /embed/batch へ1リクエストで送られる (#66)。"""
+    vecs = [_unit_vec(4, seed=i) for i in range(3)]
+    with patch("httpx.post", return_value=_make_resp(_unit_vec(4))):
+        e = RemoteEmbedder(_TEST_URL, collection="search-engine")
 
-        with patch("httpx.post", return_value=_make_resp(_unit_vec(4))) as _:
-            pass
-
-        with patch("httpx.post", return_value=_make_resp(vec)):
-            e = RemoteEmbedder(_TEST_URL, collection="search-engine")
-
-        with patch("httpx.post", return_value=resp) as mock_encode:
-            result = e.encode(["text1", "text2", "text3"])
+    with patch("httpx.post", return_value=_make_batch_resp(vecs)) as mock_post:
+        result = e.encode(["text1", "text2", "text3"])
 
     assert result.shape == (3, 4)
+    # 3件を1リクエストで送っている（直列3回ではない）
+    assert mock_post.call_count == 1
+    url = mock_post.call_args[0][0]
+    payload = mock_post.call_args[1]["json"]
+    assert url.endswith("/embed/batch")
+    assert payload["texts"] == ["text1", "text2", "text3"]
+
+
+def test_remote_embedder_batch_falls_back_to_serial_on_404():
+    """サービスがバッチ非対応 (404) の場合は直列 /embed へフォールバックする。"""
+    import httpx
+
+    with patch("httpx.post", return_value=_make_resp(_unit_vec(4))):
+        e = RemoteEmbedder(_TEST_URL, collection="search-engine")
+
+    def side_effect(url, *args, **kwargs):
+        if url.endswith("/embed/batch"):
+            resp = MagicMock()
+            req = httpx.Request("POST", url)
+            http_resp = httpx.Response(404, request=req)
+            resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "not found", request=req, response=http_resp
+            )
+            return resp
+        return _make_resp(_unit_vec(4))
+
+    with patch("httpx.post", side_effect=side_effect) as mock_post:
+        result = e.encode(["a", "b"])
+
+    assert result.shape == (2, 4)
+    assert e._batch_supported is False
+    # batch(1) + 直列2件 = 3回
+    assert mock_post.call_count == 3
+    # 一度非対応と判明したら次回はバッチを試さない
+    with patch("httpx.post", return_value=_make_resp(_unit_vec(4))) as mock_post2:
+        e.encode(["c", "d"])
+    assert all(
+        c.args[0].endswith("/embed") and not c.args[0].endswith("/embed/batch")
+        for c in mock_post2.call_args_list
+    )
+    assert mock_post2.call_count == 2
+
+
+def test_remote_embedder_batch_missing_vectors_falls_back():
+    """/embed/batch が "vectors" を返さない旧サービスも直列へフォールバック。"""
+    with patch("httpx.post", return_value=_make_resp(_unit_vec(4))):
+        e = RemoteEmbedder(_TEST_URL)
+
+    # _make_resp は "vector" のみ想定だが "vectors" も含むため、
+    # 明示的に "vectors" を欠いたレスポンスを作る
+    def side_effect(url, *args, **kwargs):
+        m = MagicMock()
+        m.raise_for_status = MagicMock()
+        if url.endswith("/embed/batch"):
+            m.json.return_value = {"dim": 4}  # vectors なし
+        else:
+            m.json.return_value = {"vector": _unit_vec(4), "dim": 4}
+        return m
+
+    with patch("httpx.post", side_effect=side_effect):
+        result = e.encode(["x", "y"])
+    assert result.shape == (2, 4)
+    assert e._batch_supported is False
+
+
+def test_remote_embedder_encode_empty_returns_empty():
+    with patch("httpx.post", return_value=_make_resp(_unit_vec(4))):
+        e = RemoteEmbedder(_TEST_URL)
+    with patch("httpx.post") as mock_post:
+        result = e.encode([])
+    assert result.shape == (0, e.dim)
+    mock_post.assert_not_called()
 
 
 def test_remote_embedder_passes_mode_to_service():
@@ -326,8 +410,7 @@ def test_remote_embedder_retries_on_transient_failure():
             raise httpx.ConnectError("transient")
         return good_resp
 
-    with patch("httpx.post", side_effect=side_effect), \
-         patch("time.sleep"):
+    with patch("httpx.post", side_effect=side_effect), patch("time.sleep"):
         result = e.encode(["retry me"], retries=2)
 
     assert result.shape == (1, 4)
