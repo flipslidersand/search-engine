@@ -155,36 +155,96 @@ class RemoteEmbedder:
         self,
         texts: list[str],
         mode: Literal["index", "search"] = "index",
+        *,
+        retries: int = 2,
     ) -> np.ndarray:
         import httpx  # pylint: disable=import-error
+        import logging
+        import time
 
+        logger = logging.getLogger(__name__)
         vecs = []
         for text in texts:
-            resp = httpx.post(
-                f"{self._base_url}/embed",
-                json={"collection": self._collection, "text": text, "mode": mode},
-                headers=self._headers,
-                timeout=self._timeout,
-            )
-            resp.raise_for_status()
-            vecs.append(resp.json()["vector"])
+            last_exc: Exception | None = None
+            for attempt in range(retries + 1):
+                try:
+                    resp = httpx.post(
+                        f"{self._base_url}/embed",
+                        json={"collection": self._collection, "text": text, "mode": mode},
+                        headers=self._headers,
+                        timeout=self._timeout,
+                    )
+                    resp.raise_for_status()
+                    vecs.append(resp.json()["vector"])
+                    last_exc = None
+                    break
+                except Exception as e:
+                    last_exc = e
+                    if attempt < retries:
+                        time.sleep(0.5 * (attempt + 1))
+            if last_exc is not None:
+                logger.warning("RemoteEmbedder failed after %d retries: %s", retries, last_exc)
+                raise last_exc
         return np.asarray(vecs, dtype=np.float32)
+
+
+# ── FallbackEmbedder ──────────────────────────────────────────────────────────
+
+
+class FallbackEmbedder:
+    """Remote → LocalST → FeatureHash の順でフォールバックする Embedder。
+
+    EMBEDDING_URL が設定されている場合にのみ生成される。
+    Remote が失敗した場合はローカル Embedder にフォールバックして処理を継続する。
+    """
+
+    def __init__(self, remote: RemoteEmbedder, local: Embedder) -> None:
+        import logging
+
+        self._remote = remote
+        self._local = local
+        self._using_remote = True
+        self._logger = logging.getLogger(__name__)
+        # dim は remote 優先
+        self.dim = remote.dim
+
+    @property
+    def backend(self) -> str:
+        active = "remote" if self._using_remote else "local"
+        return f"fallback({active}):remote={self._remote.backend},local={self._local.backend}"
+
+    def encode(
+        self,
+        texts: list[str],
+        mode: Literal["index", "search"] = "index",
+    ) -> np.ndarray:
+        if self._using_remote:
+            try:
+                return self._remote.encode(texts, mode)
+            except Exception as e:
+                self._logger.warning(
+                    "RemoteEmbedder unavailable (%s), falling back to local embedder", e
+                )
+                self._using_remote = False
+        return self._local.encode(texts, mode)
 
 
 # ── ファクトリ ────────────────────────────────────────────────────────────────
 
 
-def create_embedder() -> Embedder | RemoteEmbedder:
+def create_embedder() -> FallbackEmbedder | Embedder:
     """環境変数に応じて Embedder を選択する。
 
-    EMBEDDING_URL が設定されている場合は RemoteEmbedder、
+    EMBEDDING_URL が設定されている場合は FallbackEmbedder（Remote → Local フォールバック）、
     未設定の場合は ローカル Embedder を返す。
     """
     url = os.environ.get("EMBEDDING_URL", "").strip()
     if url:
-        return RemoteEmbedder(
+        remote = RemoteEmbedder(
             base_url=url,
             collection=os.environ.get("EMBEDDING_COLLECTION", _DEFAULT_COLLECTION),
             api_key=os.environ.get("EMBEDDING_API_KEY"),
         )
+        local = Embedder()
+        return FallbackEmbedder(remote, local)
     return Embedder()
