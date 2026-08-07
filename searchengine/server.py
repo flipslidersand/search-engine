@@ -27,6 +27,7 @@ from pydantic import BaseModel  # pylint: disable=import-error
 
 from . import hybrid, ingest, query, tokenizer
 from .index import Index
+from .metrics import metrics_output, track_index, track_rag, track_search, update_index_gauges
 from .schema_gen.api import router as schema_router
 
 # ── DB パス（起動時に差し替え可） ────────────────────────────────────────────
@@ -138,6 +139,14 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/metrics")
+def metrics():
+    from fastapi.responses import Response  # pylint: disable=import-error
+
+    data, content_type = metrics_output()
+    return Response(content=data, media_type=content_type)
+
+
 def _validate_path(path: str) -> None:
     """ALLOWED_INDEX_DIRS の範囲外パスを 403 で拒否する。"""
     allowed_raw = os.environ.get("ALLOWED_INDEX_DIRS", "")
@@ -161,20 +170,22 @@ def index_files(req: IndexRequest) -> IndexResponse:
 
     idx = _open_index(req.db, want_vector=req.vector)
     count = 0
-    try:
-        for path in ingest.iter_files(str(target)):
-            text = ingest.read_text(path)
-            idx.add_document(
-                path,
-                text,
-                doc_type=ingest.detect_type(path) or "text",
-                mtime=os.path.getmtime(path),
-            )
-            count += 1
-        s = idx.stats()
-    finally:
-        idx.close()
+    with track_index():
+        try:
+            for path in ingest.iter_files(str(target)):
+                text = ingest.read_text(path)
+                idx.add_document(
+                    path,
+                    text,
+                    doc_type=ingest.detect_type(path) or "text",
+                    mtime=os.path.getmtime(path),
+                )
+                count += 1
+            s = idx.stats()
+        finally:
+            idx.close()
 
+    update_index_gauges(s["documents"], s["chunks"])
     return IndexResponse(
         indexed=count,
         documents=s["documents"],
@@ -199,18 +210,19 @@ def search(
     idx = _open_index(db, want_vector=want_vector)
     parsed = query.parse(q)
 
-    try:
-        if mode == "keyword":
-            hits = [(h, h.score) for h in idx.search(parsed.fts, limit=n, filters=parsed.filters)]
-        elif mode == "vector":
-            hits = [
-                (h, h.score) for h in idx.vector_search(parsed.raw, limit=n, filters=parsed.filters)
-            ]
-        else:
-            fused = hybrid.search(idx, parsed, limit=n)
-            hits = [(f.hit, f.rrf) for f in fused]
-    finally:
-        idx.close()
+    with track_search(mode):
+        try:
+            if mode == "keyword":
+                hits = [(h, h.score) for h in idx.search(parsed.fts, limit=n, filters=parsed.filters)]
+            elif mode == "vector":
+                hits = [
+                    (h, h.score) for h in idx.vector_search(parsed.raw, limit=n, filters=parsed.filters)
+                ]
+            else:
+                fused = hybrid.search(idx, parsed, limit=n)
+                hits = [(f.hit, f.rrf) for f in fused]
+        finally:
+            idx.close()
 
     results = [
         SearchHit(
@@ -253,19 +265,20 @@ def ask(req: AskRequest) -> AskResponse:
 
     want_vector = req.mode in ("vector", "hybrid")
     idx = _open_index(req.db, want_vector=want_vector)
-    try:
-        result = rag_module.ask(
-            idx,
-            req.question,
-            mode=req.mode,
-            top_k=req.top_k,
-            ollama_url=req.ollama_url or os.environ.get("OLLAMA_URL", "http://localhost:11434"),
-            model=req.model,
-        )
-    except httpx_module.HTTPError as e:
-        raise HTTPException(status_code=500, detail=f"Ollama エラー: {e}")
-    finally:
-        idx.close()
+    with track_rag():
+        try:
+            result = rag_module.ask(
+                idx,
+                req.question,
+                mode=req.mode,
+                top_k=req.top_k,
+                ollama_url=req.ollama_url or os.environ.get("OLLAMA_URL", "http://localhost:11434"),
+                model=req.model,
+            )
+        except httpx_module.HTTPError as e:
+            raise HTTPException(status_code=500, detail=f"Ollama エラー: {e}")
+        finally:
+            idx.close()
 
     return AskResponse(
         answer=result.answer,
