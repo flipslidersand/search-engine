@@ -15,6 +15,7 @@ import pytest
 from searchengine.embedder import (
     Embedder,
     EmbedderProtocol,
+    FallbackEmbedder,
     RemoteEmbedder,
     create_embedder,
 )
@@ -209,7 +210,7 @@ def test_create_embedder_returns_local_without_url():
     assert isinstance(e, Embedder)
 
 
-def test_create_embedder_returns_remote_with_url():
+def test_create_embedder_returns_fallback_with_url():
     vec = _unit_vec(4)
     with patch("httpx.post", return_value=_make_resp(vec)):
         with patch.dict(
@@ -221,7 +222,7 @@ def test_create_embedder_returns_remote_with_url():
             },
         ):
             e = create_embedder()
-    assert isinstance(e, RemoteEmbedder)
+    assert isinstance(e, FallbackEmbedder)
     assert "localhost" in e.backend
 
 
@@ -237,5 +238,97 @@ def test_create_embedder_passes_collection_from_env():
             clear=False,
         ):
             e = create_embedder()
-    assert isinstance(e, RemoteEmbedder)
+    assert isinstance(e, FallbackEmbedder)
     assert "custom-col" in e.backend
+
+
+# ── FallbackEmbedder ──────────────────────────────────────────────────────────
+
+
+def test_fallback_uses_remote_when_healthy():
+    vec = _unit_vec(4)
+    with patch("httpx.post", return_value=_make_resp(vec)):
+        remote = RemoteEmbedder(_TEST_URL, collection="search-engine")
+    local = Embedder()
+    fb = FallbackEmbedder(remote, local)
+
+    with patch("httpx.post", return_value=_make_resp(vec)):
+        result = fb.encode(["test"])
+    assert result.shape == (1, 4)
+    assert "remote" in fb.backend
+
+
+def test_fallback_switches_to_local_on_remote_failure():
+    import httpx
+
+    vec = _unit_vec(4)
+    with patch("httpx.post", return_value=_make_resp(vec)):
+        remote = RemoteEmbedder(_TEST_URL, collection="search-engine")
+    local = Embedder()
+    fb = FallbackEmbedder(remote, local)
+
+    with patch("httpx.post", side_effect=httpx.ConnectError("down")):
+        result = fb.encode(["test"])
+
+    assert isinstance(result, np.ndarray)
+    assert result.shape[0] == 1
+    assert "local" in fb.backend
+
+
+def test_fallback_stays_local_after_switching():
+    import httpx
+
+    vec = _unit_vec(4)
+    with patch("httpx.post", return_value=_make_resp(vec)):
+        remote = RemoteEmbedder(_TEST_URL, collection="search-engine")
+    local = Embedder()
+    fb = FallbackEmbedder(remote, local)
+
+    # 最初の呼び出しで Remote 失敗 → Local へ
+    with patch("httpx.post", side_effect=httpx.ConnectError("down")):
+        fb.encode(["first"])
+
+    # 2回目以降は Remote 復活しても Local を使い続ける
+    call_count = {"local": 0}
+    original_encode = local.encode
+
+    def counting_encode(texts, mode="index"):
+        call_count["local"] += 1
+        return original_encode(texts, mode)
+
+    local.encode = counting_encode
+    fb.encode(["second"])
+    assert call_count["local"] == 1
+
+
+def test_fallback_local_chain_feature_hash():
+    """LocalST 未インストール時は FeatureHash を使う（Embedder の内部フォールバック）。"""
+    e = Embedder()
+    # sentence-transformers が無い環境では fallback(hashing) backend になる
+    result = e.encode(["hash test"])
+    assert result.shape == (1, e.dim)
+    assert isinstance(result, np.ndarray)
+
+
+def test_remote_embedder_retries_on_transient_failure():
+    import httpx
+
+    vec = _unit_vec(4)
+    with patch("httpx.post", return_value=_make_resp(vec)):
+        e = RemoteEmbedder(_TEST_URL)
+
+    call_count = {"n": 0}
+    good_resp = _make_resp(vec)
+
+    def side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] < 2:
+            raise httpx.ConnectError("transient")
+        return good_resp
+
+    with patch("httpx.post", side_effect=side_effect), \
+         patch("time.sleep"):
+        result = e.encode(["retry me"], retries=2)
+
+    assert result.shape == (1, 4)
+    assert call_count["n"] == 2
