@@ -148,7 +148,7 @@ class Index:
     def vector_search(self, text: str, limit: int = 10, filters: dict | None = None) -> list[Hit]:
         if self.vectors is None:
             raise RuntimeError("Index was created without an embedder")
-        qvec = self.embedder.encode([text])[0]
+        qvec = self.embedder.encode([text], mode="search")[0]
         allowed = self.allowed_doc_ids(filters)
         vhits = self.vectors.search(qvec, limit=limit, allowed_docs=allowed)
         return [self._to_hit(v.doc_id, v.chunk_index, v.score) for v in vhits]

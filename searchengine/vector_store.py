@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -125,11 +126,11 @@ class SqliteVectorStore:
 
 
 # ── Qdrant コレクション仕様（#42 確定） ──────────────────────────────────────
-# vector_size: MINIPC e5-small embedding svc (port 9092) の出力次元
+# vector_size: multilingual-e5-base (MINIPC embedding-svc port 9092) の出力次元
 # distance:    Cosine（正規化済みベクトルの内積と等価）
 # payload:     { source: str, chunk_id: str, text: str, doc_type: str }
 QDRANT_COLLECTION = "search-engine-docs"
-QDRANT_VECTOR_SIZE = 384
+QDRANT_VECTOR_SIZE = int(os.environ.get("QDRANT_VECTOR_SIZE", "768"))
 QDRANT_DISTANCE = "Cosine"
 
 class QdrantVectorStore:
