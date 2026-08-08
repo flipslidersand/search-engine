@@ -21,6 +21,16 @@ _BOOL = {"and": "AND", "or": "OR", "not": "NOT"}
 _FIELD = re.compile(r'(?<!\S)(type|path):("[^"]+"|\S+)')
 _FIELDS = {"type", "path"}
 
+# 疑問文語尾パターン: FTS クエリ生成前に除去してキーワード部分のみ残す (#69)
+# raw（ベクトル検索用）には適用しない
+_QUESTION_SUFFIX = re.compile(
+    r"[\s　]*("
+    r"とは何ですか|とは何か|って何ですか|って何|でしょうか|ですか|でしょう"
+    r"|について教えてください|について教えて|について|とは"
+    r"|ください|教えてください|教えて"
+    r")[？?。\s]*$"
+)
+
 
 @dataclass
 class ParsedQuery:
@@ -42,7 +52,9 @@ def parse(user_query: str) -> ParsedQuery:
     for op in (" AND ", " OR ", " NOT ", " and ", " or ", " not "):
         raw = raw.replace(op, " ")
     raw = " ".join(raw.split())
-    return ParsedQuery(fts=to_fts_query(remaining), raw=raw, filters=filters)
+    # FTS 用クエリは疑問文語尾を除去してキーワード部分のみ使う (#69)
+    fts_input = _QUESTION_SUFFIX.sub("", remaining).strip() or remaining
+    return ParsedQuery(fts=to_fts_query(fts_input), raw=raw, filters=filters)
 
 
 def _quote_terms(text: str) -> list[str]:

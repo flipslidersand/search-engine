@@ -83,6 +83,47 @@ def test_hybrid_rrf():
     idx.close()
 
 
+# --- Phase 3 / #69: 疑問文語尾 FTS 除去 ---
+
+
+def test_question_suffix_stripped_from_fts():
+    # "とは何ですか" を除去してキーワードのみ FTS に渡す
+    p = query.parse("BM25とは何ですか")
+    assert '"bm25"' in p.fts.lower() or "bm25" in p.fts.lower()
+    # 疑問文語尾が FTS クエリに混入しないこと
+    assert "とは" not in p.fts
+    assert "何ですか" not in p.fts
+
+
+def test_question_raw_preserved():
+    # raw はベクトル検索用なので語尾を保持する
+    p = query.parse("BM25とは何ですか")
+    assert "bm25" in p.raw.lower()
+    assert "とは" in p.raw or "何" in p.raw
+
+
+def test_non_question_query_unchanged():
+    # 疑問文でないクエリはそのまま処理される
+    p1 = query.parse("機械学習 モデル")
+    p2 = query.parse("FastAPI")
+    assert "機械学習" in p1.fts or "機" in p1.fts  # トークン化されてもヒット
+    assert "fastapi" in p2.fts.lower()
+
+
+def test_various_question_suffixes():
+    # 疑問文語尾は FTS から除去され、ノイズトークンが含まれないこと
+    cases = [
+        ("FastAPIについて教えてください", "fastapi"),
+        ("機械学習とは何か", "機械"),  # bigram tokenizer: "機械学習" → "機械"/"械学"/"学習"
+        ("Rustでしょうか", "rust"),
+    ]
+    for q_str, expected_keyword in cases:
+        p = query.parse(q_str)
+        assert expected_keyword.lower() in p.fts.lower(), f"failed for: {q_str!r}, fts={p.fts!r}"
+        assert "ください" not in p.fts
+        assert "でしょうか" not in p.fts
+
+
 if __name__ == "__main__":
     test_tokenize_nonempty()
     test_chunk_overlap_guard()
@@ -93,4 +134,8 @@ if __name__ == "__main__":
     test_vector_search()
     test_field_filter()
     test_hybrid_rrf()
+    test_question_suffix_stripped_from_fts()
+    test_question_raw_preserved()
+    test_non_question_query_unchanged()
+    test_various_question_suffixes()
     print("all tests passed")
